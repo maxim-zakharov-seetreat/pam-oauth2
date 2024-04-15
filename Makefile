@@ -1,4 +1,4 @@
-CFLAGS=-Wall -fPIC -ansi -pedantic
+CFLAGS=-Wall -fPIC -std=c99 -pedantic
 LIBDIR=/lib
 
 ifeq ($(shell if uname -o | grep -q "GNU/Linux" ; then echo true; else echo false; fi),true)
