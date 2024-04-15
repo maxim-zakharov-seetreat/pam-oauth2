@@ -16,9 +16,12 @@ $ sudo make install
 ## Configuration
 
 ```
-auth sufficient pam_oauth2.so <tokeninfo url> <login field> key1=value2 key2=value2
+auth sufficient pam_oauth2.so <tokeninfo url> <login field> [POST] key1=value2 key2=value2
 account sufficient pam_oauth2.so
 ```
+
+Optional parameter `POST` indicates to use POST method when sending request to the <tokeninfo url>.
+If it is omitted, the GET method is used.
 
 ## How it works
 
