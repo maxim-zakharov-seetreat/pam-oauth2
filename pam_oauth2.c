@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <syslog.h>
 #include <curl/curl.h>
 #include <security/pam_modules.h>
@@ -130,10 +131,14 @@ static int check_response(const struct response token_info, struct check_tokens 
     return r;
 }
 
-static int query_token_info(const char * const tokeninfo_url, const char * const authtok, long *response_code, struct response *token_info) {
+static int query_token_info(const int post, const char * authz,
+                            const char * const tokeninfo_url,
+                            const char * const authtok,
+                            long *response_code, struct response *token_info) {
     int ret = 1;
     char *url;
     CURL *session = curl_easy_init();
+    struct curl_slist *list = NULL;
 
     if (!session) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: can't initialize curl");
@@ -144,9 +149,28 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
         strcpy(url, tokeninfo_url);
         strcat(url, authtok);
 
-        curl_easy_setopt(session, CURLOPT_URL, url);
         curl_easy_setopt(session, CURLOPT_WRITEFUNCTION, writefunc);
         curl_easy_setopt(session, CURLOPT_WRITEDATA, token_info);
+        if (post) {
+	    char *postfields = strrchr(url, '?');
+	    if (postfields != NULL) {
+	        *postfields++ = '\0';
+		curl_easy_setopt(session, CURLOPT_POSTFIELDSIZE, strlen(postfields));
+		curl_easy_setopt(session, CURLOPT_POSTFIELDS, postfields);
+	    }
+            curl_easy_setopt(session, CURLOPT_POST, 1L);
+        }
+        curl_easy_setopt(session, CURLOPT_URL, url);
+        if (authz != NULL) {
+            size_t authz_len = strlen(authz);
+            {
+                char header[authz_len + 22];
+                strcpy(header, "Authorization: Basic ");
+                strcat(header, authz);
+                list = curl_slist_append(list, header);
+                curl_easy_setopt(session, CURLOPT_HTTPHEADER, list);
+            }
+        }
 
         if (curl_easy_perform(session) == CURLE_OK &&
                 curl_easy_getinfo(session, CURLINFO_RESPONSE_CODE, response_code) == CURLE_OK) {
@@ -156,6 +180,9 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
         }
 
         free(url);
+        if (list != NULL) {
+            curl_slist_free_all(list);
+        }
     } else {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: memory allocation failed");
     }
@@ -165,7 +192,9 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
     return ret;
 }
 
-static int oauth2_authenticate(const char * const tokeninfo_url, const char * const authtok, struct check_tokens *ct) {
+static int oauth2_authenticate(const int post, const char *authz,
+                               const char * const tokeninfo_url,
+                               const char * const authtok, struct check_tokens *ct) {
     struct response token_info;
     long response_code = 0;
     int ret;
@@ -176,7 +205,7 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
     }
     token_info.ptr[token_info.len = 0] = '\0';
 
-    if (query_token_info(tokeninfo_url, authtok, &response_code, &token_info) != 0) {
+    if (query_token_info(post, authz, tokeninfo_url, authtok, &response_code, &token_info) != 0) {
         ret = PAM_AUTHINFO_UNAVAIL;
     } else if (response_code == 200) {
         ret = check_response(token_info, ct);
@@ -191,9 +220,9 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
 }
 
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
-    const char *tokeninfo_url = NULL, *authtok = NULL;
+    const char *tokeninfo_url = NULL, *authtok = NULL, *authz = NULL;
     struct check_tokens ct[argc];
-    int i, ct_len = 1;
+    int i, ct_len = 1, post = 0;
     ct->key = ct->value = NULL;
 
     if (argc > 0) tokeninfo_url = argv[0];
@@ -225,17 +254,21 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
 
     for (i = 2; i < argc; ++i) {
         const char *value = strchr(argv[i], '=');
-        if (value != NULL) {
+	if (argv[i][0] == ':') {
+	    authz = &argv[i][1];
+	} else if (value != NULL) {
             ct[ct_len].key = argv[i];
             ct[ct_len].key_len = value - argv[i];
             ct[ct_len].value = value + 1;
             ct[ct_len].value_len = strlen(value + 1);
             ct[ct_len++].match = 0;
+        } else {
+	    post = (strcasecmp("POST", argv[i]) == 0);
         }
     }
     ct[ct_len].key = NULL;
 
-    return oauth2_authenticate(tokeninfo_url, authtok, ct);
+    return oauth2_authenticate(post, authz, tokeninfo_url, authtok, ct);
 }
 
 PAM_EXTERN int pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv) {
