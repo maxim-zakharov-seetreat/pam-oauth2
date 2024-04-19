@@ -152,7 +152,7 @@ static int query_token_info(const int post, const char * authz,
         curl_easy_setopt(session, CURLOPT_WRITEFUNCTION, writefunc);
         curl_easy_setopt(session, CURLOPT_WRITEDATA, token_info);
         if (post) {
-	    char *postfields = strrchr(url, '?');
+	  char *postfields = strrchr(url, (int)'?');
 	    if (postfields != NULL) {
 	        *postfields++ = '\0';
 		curl_easy_setopt(session, CURLOPT_POSTFIELDSIZE, strlen(postfields));
@@ -165,8 +165,15 @@ static int query_token_info(const int post, const char * authz,
             size_t authz_len = strlen(authz);
             {
                 char header[authz_len + 22];
+		char *p = strchr(authz, (int)':');
                 strcpy(header, "Authorization: Basic ");
-                strcat(header, authz);
+		if (NULL != p) {
+		    strcpy(header + 15, authz);
+		    header[15 + p - authz] = ' ';
+		} else {
+		    strcat(header, authz);
+		}
+		syslog(LOG_AUTH|LOG_DEBUG, "header: %s", header);
                 list = curl_slist_append(list, header);
                 curl_easy_setopt(session, CURLOPT_HTTPHEADER, list);
             }
